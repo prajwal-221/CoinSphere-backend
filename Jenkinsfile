@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = 'us-east-1'
-        ECR_REPO = '016311861830.dkr.ecr.us-east-1.amazonaws.com/dev/crypto-backend'
+        AWS_REGION = 'us-west-1'
+        ECR_REPO = '253472910275.dkr.ecr.us-west-1.amazonaws.com/coinsphere-backend'
         ECS_CLUSTER = 'my-ecs-cluster'
         ECS_SERVICE = 'backend-service'
         TASK_DEFINITION = 'backend-task'
@@ -12,7 +12,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git url: 'https://github.com/ankit-ht/crypto-dashboard-backend.git', branch: 'main'
+                git url: 'https://github.com/prajwal-221/CoinSphere-backend.git', branch: 'main'
             }
         }
 
@@ -22,7 +22,7 @@ pipeline {
                     // Get short git SHA for tagging
                     def IMAGE_TAG = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
                     
-                    // Build Docker image from server/ folder
+                    // Build Docker image from ./server folder
                     sh "docker build -t ${ECR_REPO}:${IMAGE_TAG} ./server"
                     
                     // Export IMAGE_TAG for later stages
@@ -53,7 +53,7 @@ pipeline {
                         # Fetch current ECS task definition
                         TASK_DEF_JSON=\$(aws ecs describe-task-definition --task-definition ${TASK_DEFINITION})
 
-                        # Update only the container image, keep memory/cpu/secrets intact
+                        # Update container image and preserve memory & cpu
                         NEW_TASK_DEF=\$(echo \$TASK_DEF_JSON | jq --arg IMAGE "${ECR_REPO}:${env.IMAGE_TAG}" '
                           .taskDefinition.containerDefinitions[0].image = \$IMAGE |
                           {
@@ -61,15 +61,17 @@ pipeline {
                             containerDefinitions: .taskDefinition.containerDefinitions,
                             executionRoleArn: .taskDefinition.executionRoleArn,
                             networkMode: .taskDefinition.networkMode,
-                            requiresCompatibilities: .taskDefinition.requiresCompatibilities
+                            requiresCompatibilities: .taskDefinition.requiresCompatibilities,
+                            cpu: .taskDefinition.cpu,
+                            memory: .taskDefinition.memory
                           }'
                         )
 
-                        # Register new task definition revision
-                        aws ecs register-task-definition --cli-input-json "\$NEW_TASK_DEF"
+                        # Register new task definition revision and get ARN
+                        NEW_REVISION_ARN=\$(aws ecs register-task-definition --cli-input-json "\$NEW_TASK_DEF" --query "taskDefinition.taskDefinitionArn" --output text)
 
-                        # Update ECS service with new task definition
-                        aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${TASK_DEFINITION}
+                        # Update ECS service with new task definition revision
+                        aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition \$NEW_REVISION_ARN
                         """
                     }
                 }
